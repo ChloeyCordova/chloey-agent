@@ -2,10 +2,14 @@
 
 Runs on a schedule (GitHub Actions). Each run:
   1. Reads new Telegram messages/button taps from the owner (images, approvals, commands).
-  2. Publishes the next approved post if it's a posting day and time.
-  3. Reads new Instagram comments and replies / hides / flags them in Chloey's voice.
-  4. Saves its state back to the repo.
+  2. Keeps a few posts ready ahead: writes new post ideas when the plan runs out,
+     generates the image with Nano Banana Pro (Gemini API), has Claude quality-check it,
+     and queues it (auto-approve) or sends it for approval.
+  3. Publishes the next approved post if it's a posting day and time.
+  4. Reads new Instagram comments and replies / hides / flags them in Chloey's voice.
+  5. Saves its state back to the repo.
 """
+import base64
 import io
 import json
 import os
@@ -39,6 +43,22 @@ BRANCH = os.environ.get("GITHUB_REF_NAME", "main")
 TG = f"https://api.telegram.org/bot{TG_TOKEN}"
 IG = f"https://graph.instagram.com/{CONFIG['instagram_api_version']}"
 claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+REFS = sorted((ROOT / "refs").glob("*.jpg"))  # 1-5 = face, 6 = style
+
+PREFIX = ("Use the woman in reference images 1–5 as the exact same person: same face shape, light blue eyes, "
+          "darker defined brows, full lips, and long wavy dirty-golden blonde hair. Do not change her face or body type. "
+          "Match the photographic look of reference image 6: muted film tones, natural grain, unretouched.")
+SUFFIX = ("Her skin is completely matte with visible pores — no gloss, no sheen, no retouching. "
+          "Realistic everyday proportions, like an ordinary 27-year-old, not a model. Candid, slightly imperfect framing. "
+          "Any signs, labels, or text in the scene are out of focus and unreadable. No logos. Vertical 4:5 portrait format.")
+SHARP = ("Sharp focus, crisp high detail, shot on a modern full-frame camera. Keep grain minimal. "
+         "Her face must be clearly in focus.")
+
+
+def setting(key, default=None):
+    """State overrides config (so Telegram commands can change settings)."""
+    return STATE.get(key, CONFIG.get(key, default))
 
 
 # ---------------------------------------------------------------- helpers
@@ -66,6 +86,135 @@ def ask_claude(system, user, model=None, max_tokens=600):
         messages=[{"role": "user", "content": user}],
     )
     return "".join(b.text for b in msg.content if b.type == "text").strip()
+
+
+def b64(data):
+    return base64.b64encode(data).decode()
+
+
+def img_block(data):
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64(data)}}
+
+
+# ---------------------------------------------------------------- automatic images
+
+def gemini_image(prompt):
+    """Generate one image with Nano Banana Pro using the reference photos. Returns raw bytes."""
+    parts = [{"inlineData": {"mimeType": "image/jpeg", "data": b64(r.read_bytes())}} for r in REFS]
+    parts.append({"text": prompt})
+    body = {"contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"responseModalities": ["IMAGE"],
+                                 "imageConfig": {"aspectRatio": "4:5", "imageSize": "2K"}}}
+    models = [m for m in dict.fromkeys([CONFIG.get("gemini_model"), "gemini-3-pro-image",
+                                        "gemini-3-pro-image-preview"]) if m]
+    last = ""
+    for model in models:
+        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                          headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=240)
+        if r.status_code == 404:
+            last = f"model {model} not found"
+            continue
+        data = r.json()
+        if "error" in data:
+            raise RuntimeError(f"Gemini error: {data['error'].get('message', data['error'])}")
+        for cand in data.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    return base64.b64decode(inline["data"])
+        reason = (data.get("promptFeedback", {}).get("blockReason")
+                  or next((c.get("finishReason") for c in data.get("candidates", [])), "no image returned"))
+        raise RuntimeError(f"Gemini returned no image ({reason})")
+    raise RuntimeError(f"Gemini: {last}")
+
+
+QC_RULES = """You are the photo editor for an Instagram account about Chloey, an AI-generated travel creator.
+Image 1 is Chloey's official face reference. Image 2 is a candidate post.
+Fail the candidate if ANY of these are true:
+- The woman's face clearly doesn't look like the same person as the reference
+- Skin looks glossy, plastic, or heavily retouched
+- Hands or fingers are malformed, or there are extra or missing limbs
+- There is readable but garbled or misspelled text, or a visible brand logo
+- Her body proportions look exaggerated or unrealistic
+- The image is blurry, soft, or her face is out of focus
+- Nudity or anything Instagram would remove
+Small imperfections are fine; real phone photos aren't perfect.
+Answer with JSON only: {"pass": true|false, "issues": "<short list, empty if pass>"}"""
+
+
+def quality_check(candidate_bytes):
+    msg = claude.messages.create(
+        model=CONFIG["claude_model"], max_tokens=300, system=QC_RULES,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": "Image 1 (reference):"}, img_block(REFS[0].read_bytes()),
+            {"type": "text", "text": "Image 2 (candidate):"}, img_block(candidate_bytes),
+            {"type": "text", "text": "Judge image 2."}]}])
+    text = "".join(b.text for b in msg.content if b.type == "text")
+    m = re.search(r"\{.*\}", text, re.S)
+    result = json.loads(m.group()) if m else {"pass": False, "issues": "unreadable check"}
+    return bool(result.get("pass")), result.get("issues", "")
+
+
+NEW_POST_RULES = CHARACTER + """
+
+## Your job right now
+Plan Chloey's next Instagram post. Answer with JSON only:
+{"region": "<place, e.g. LAS VEGAS>", "title": "<short scene name>",
+ "category": "Travel" | "Everyday" | "Real life", "swim": true|false,
+ "caption": "<caption in her voice, no hashtags>", "hashtags": "<10 hashtags>",
+ "scene": "<1-3 sentences describing the photo: where she is, what she's wearing, what she's doing, the light>"}
+Rules: keep roughly 60% travel, 25% everyday, 15% unglamorous real life. Don't repeat a recent scene.
+Places she goes: Las Vegas, San Diego, Washington DC, Seattle, Florida, Puerto Rico, Italy, US road trips, boats, flights.
+Swimwear only when the place calls for it, always tasteful (one-pieces or cover-ups, wide shots). No brands or logos."""
+
+
+def plan_new_post():
+    recent = [f"{p['title']} ({p.get('category', '')})" for p in POSTS[-15:]]
+    plan = json.loads(re.search(r"\{.*\}", ask_claude(
+        NEW_POST_RULES, "Recent posts, newest last:\n" + "\n".join(recent), max_tokens=700), re.S).group())
+    n = max(p["n"] for p in POSTS) + 1
+    post = {"n": n, "region": plan["region"].upper(), "title": plan["title"],
+            "category": plan.get("category", "Travel"), "swim": bool(plan.get("swim")),
+            "caption": plan["caption"], "hashtags": plan["hashtags"],
+            "prompt": f"{PREFIX}\n\nScene: {plan['scene']}\n\n{SUFFIX}", "status": "needs_image",
+            "planned_by_agent": True}
+    POSTS.append(post)
+    return post
+
+
+def maybe_generate():
+    """Keep `queue_target` posts ready ahead. Generates at most one image per run."""
+    if STATE["paused"] or not GEMINI_KEY or len(REFS) < 6:
+        return
+    ready = sum(1 for p in POSTS if p["status"] in ("approved", "pending_approval"))
+    if ready >= int(setting("queue_target", 3)):
+        return
+    post = next((p for p in POSTS if p["status"] == "needs_image"), None) or plan_new_post()
+    prompt = f"{post['prompt']}\n\n{SHARP}"
+    issues = ""
+    for attempt in range(int(setting("max_image_attempts", 2))):
+        raw = gemini_image(prompt)
+        save_instagram_jpeg(raw, post["n"])
+        ok, issues = quality_check(image_path(post["n"]).read_bytes())
+        if ok:
+            break
+    else:
+        post["gen_failures"] = post.get("gen_failures", 0) + 1
+        image_path(post["n"]).unlink(missing_ok=True)
+        if post["gen_failures"] >= 3:
+            post["status"] = "skipped"
+            say(f"Skipping post {post['n']} ({esc(post['title'])}) — couldn't get a clean image. Last issue: {esc(issues)}")
+        else:
+            say(f"Post {post['n']} image didn't pass my check ({esc(issues)}). I'll try again next run.")
+        return
+    post.pop("final_caption", None)
+    if setting("auto_approve", True):
+        post["status"] = "approved"
+        post["approved_at"] = datetime.now(timezone.utc).isoformat()
+        send_preview(post, auto=True)
+    else:
+        post["status"] = "pending_approval"
+        send_preview(post)
 
 
 # ---------------------------------------------------------------- Telegram
@@ -100,16 +249,21 @@ def send_prompt(post):
     STATE["last_prompt_sent"] = post["n"]
 
 
-def send_preview(post):
-    buttons = {"inline_keyboard": [[
-        {"text": "✅ Approve", "callback_data": f"approve:{post['n']}"},
-        {"text": "✏️ New caption", "callback_data": f"recap:{post['n']}"},
-        {"text": "⏭ Redo image", "callback_data": f"skip:{post['n']}"},
-    ]]}
+def send_preview(post, auto=None):
+    auto = post["status"] == "approved" if auto is None else auto
+    row = [] if auto else [{"text": "✅ Approve", "callback_data": f"approve:{post['n']}"}]
+    row += [{"text": "✏️ New caption", "callback_data": f"recap:{post['n']}"},
+            {"text": "⏭ Redo image", "callback_data": f"skip:{post['n']}"}]
+    rows = [row]
+    if auto:
+        rows.append([{"text": "🛑 Remove", "callback_data": f"remove:{post['n']}"}])
+    header = (f"Queued automatically: post {post['n']} — {post['title']}\n"
+              f"Tap a button before it posts if you want a change.\n\n" if auto
+              else f"Post {post['n']} — {post['title']}\n\n")
     with open(image_path(post["n"]), "rb") as f:
         tg("sendPhoto", files={"photo": f}, chat_id=CHAT_ID,
-           caption=f"Post {post['n']} — {post['title']}\n\n{full_caption(post)}"[:1020],
-           reply_markup=buttons)
+           caption=(header + full_caption(post))[:1020],
+           reply_markup={"inline_keyboard": rows})
 
 
 def download_tg_file(file_id):
@@ -144,9 +298,11 @@ HELP = (
     "/prompt 7 — prompt for a specific post\n"
     "/status — where every post stands\n"
     "/pause — stop posting and replying\n"
-    "/resume — start again\n\n"
-    "To add an image: send it <b>as a file</b> with the post number as the caption (e.g. <b>7</b>). "
-    "I'll send a preview with Approve buttons. I check messages about every 30 minutes."
+    "/resume — start again\n"
+    "/auto on — I queue my own images without waiting for you (you can still veto)\n"
+    "/auto off — every image waits for your Approve\n\n"
+    "I make the images myself when the Gemini key is set. You can still add your own: send it "
+    "<b>as a file</b> with the post number as the caption (e.g. <b>7</b>). I check in about every 30 minutes."
 )
 
 
@@ -168,6 +324,8 @@ def handle_command(text):
         queued = [str(p["n"]) for p in sorted(
             (p for p in POSTS if p["status"] == "approved"), key=lambda p: p.get("approved_at", ""))]
         say(f"<b>Status</b>{' (PAUSED)' if STATE['paused'] else ''}\n"
+            f"Images: {'automatic' if GEMINI_KEY else 'manual'} · "
+            f"Auto-approve: {'on' if setting('auto_approve', True) else 'off'}\n\n"
             + "\n".join(f"{k}: {v}" for k, v in counts.items())
             + f"\n\nQueue (posts in this order): {', '.join(queued) or 'empty'}")
     elif t == "/pause":
@@ -176,6 +334,10 @@ def handle_command(text):
     elif t == "/resume":
         STATE["paused"] = False
         say("Back on.")
+    elif t in ("/auto on", "/auto off"):
+        STATE["auto_approve"] = t.endswith("on")
+        say("Auto-approve is ON. I'll queue images myself; tap Remove or Redo on a preview to stop one."
+            if STATE["auto_approve"] else "Auto-approve is OFF. Every image waits for your ✅ Approve.")
     else:
         say("I didn't catch that. /help shows the commands.")
 
@@ -228,8 +390,16 @@ def handle_button(cb):
     elif action == "skip":
         post["status"] = "needs_image"
         post.pop("final_caption", None)
+        post.pop("gen_failures", None)
         image_path(post["n"]).unlink(missing_ok=True)
-        send_prompt(post)
+        if GEMINI_KEY:
+            say(f"Got it. I'll make a new image for post {post['n']} on my next check.")
+        else:
+            send_prompt(post)
+    elif action == "remove":
+        post["status"] = "skipped"
+        image_path(post["n"]).unlink(missing_ok=True)
+        say(f"Removed post {post['n']} — {esc(post['title'])}. It won't be posted.")
 
 
 def process_telegram():
@@ -402,6 +572,7 @@ def main():
         STATE["online_announced"] = True
     guarded("Telegram", process_telegram)
     guarded("Posting", maybe_publish)
+    guarded("Images", maybe_generate)
     guarded("Comments", process_comments)
     STATE_PATH.write_text(json.dumps(STATE, indent=2))
     POSTS_PATH.write_text(json.dumps(POSTS, indent=2, ensure_ascii=False))
