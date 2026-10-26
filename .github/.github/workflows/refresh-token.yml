@@ -1,0 +1,29 @@
+name: Refresh Instagram token
+
+on:
+  schedule:
+    - cron: "0 15 * * 1"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Get a fresh token
+        run: python agent/refresh_token.py
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          NEW_TOKEN_FILE: ${{ runner.temp }}/ig_token
+
+      - name: Save it back to the repo secrets
+        run: gh secret set IG_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY" < "$RUNNER_TEMP/ig_token"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
