@@ -1,7 +1,7 @@
 {
-  "telegram_offset": 449309125,
+  "telegram_offset": 449309127,
   "paused": false,
-  "last_prompt_sent": null,
+  "last_prompt_sent": 1,
   "last_post_date": null,
   "handled_comments": [],
   "online_announced": true,
