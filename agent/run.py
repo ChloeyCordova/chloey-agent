@@ -148,10 +148,19 @@ def quality_check(candidate_bytes):
         messages=[{"role": "user", "content": [
             {"type": "text", "text": "Image 1 (reference):"}, img_block(REFS[0].read_bytes()),
             {"type": "text", "text": "Image 2 (candidate):"}, img_block(candidate_bytes),
-            {"type": "text", "text": "Judge image 2."}]}])
-    text = "".join(b.text for b in msg.content if b.type == "text")
+            {"type": "text", "text": 'Judge image 2. Reply with ONLY the JSON object, e.g. '
+                                     '{"pass": true, "issues": ""} — no other words.'}]}])
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
     m = re.search(r"\{.*\}", text, re.S)
-    result = json.loads(m.group()) if m else {"pass": False, "issues": "unreadable check"}
+    try:
+        result = json.loads(m.group()) if m else None
+    except json.JSONDecodeError:
+        result = None
+    if result is None:
+        low = text.lower()
+        if re.search(r'"?pass"?\s*[:=]\s*true', low):
+            return True, ""
+        return False, "unreadable check: " + (text[:200] or "empty reply")
     return bool(result.get("pass")), result.get("issues", "")
 
 
@@ -449,6 +458,9 @@ _ME = {}
 def me():
     if not _ME:
         _ME.update(ig_get("me", fields="user_id,username"))
+        if not STATE.get("ig_ok_announced"):
+            say(f"✅ Instagram connected as @{esc(_ME.get('username', '?'))}")
+            STATE["ig_ok_announced"] = True
     return _ME
 
 
@@ -556,14 +568,18 @@ def _iso(s):
 # ---------------------------------------------------------------- main
 
 def guarded(name, fn):
+    errors = STATE.setdefault("errors", {})
+    STATE.pop("last_error", None)  # old format
     try:
         fn()
+        if errors.pop(name, None):
+            say(f"✅ {name} is working again.")
     except Exception as e:
         traceback.print_exc()
-        err = f"{name}: {e}"[:400]
-        if STATE.get("last_error") != err:  # don't repeat the same alert every run
-            say(f"⚠️ {esc(err)}")
-            STATE["last_error"] = err
+        err = str(e)[:400]
+        if errors.get(name) != err:  # don't repeat the same alert every run
+            say(f"⚠️ {name}: {esc(err)}")
+            errors[name] = err
 
 
 def main():
