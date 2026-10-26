@@ -1,0 +1,11 @@
+{
+  "timezone": "America/Los_Angeles",
+  "post_days": ["Mon", "Tue", "Thu", "Fri", "Sun"],
+  "post_hour": 17,
+  "max_comment_replies_per_run": 15,
+  "posts_to_watch_for_comments": 10,
+  "claude_model": "claude-sonnet-5-5",
+  "comment_model": "claude-haiku-5-5",
+  "instagram_api_version": "v26.0",
+  "add_hashtags": true
+}
