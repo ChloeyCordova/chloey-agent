@@ -6,5 +6,6 @@
   "handled_comments": [],
   "online_announced": true,
   "empty_queue_warned": "2026-10-25",
-  "comments_since": "2026-10-26T02:41:34.273816+00:00"
+  "comments_since": "2026-10-26T02:41:34.273816+00:00",
+  "last_error": "Comments: Instagram error on GET me: Invalid OAuth access token - Cannot parse access token"
 }
