@@ -23,8 +23,8 @@
     "caption": "this city does not want you to know what time it is and honestly? it's working",
     "hashtags": "#vegasnights #lasvegasstrip #neonlights #nightout #citylights #vegaslife #travelphotography #nightphotography #sincity #wanderlust",
     "prompt": "Use the woman in reference images 1–5 as the exact same person: same face shape, light blue eyes, darker defined brows, full lips, and long wavy dirty-golden blonde hair. Do not change her face or body type. Match the photographic look of reference image 6: muted film tones, natural grain, unretouched.\n\nScene: walking along the Las Vegas Strip sidewalk at night in a black slip dress and a denim jacket, half-turned toward the camera mid-laugh. Lit only by casino neon and passing headlights, mixed color temperature, visible noise, slight motion blur, crowded sidewalk behind her.\n\nHer skin is completely matte with visible pores — no gloss, no sheen, no retouching. Realistic everyday proportions, like an ordinary 27-year-old, not a model. Candid, slightly imperfect framing. Any signs, labels, or text in the scene are out of focus and unreadable. No logos. Vertical 4:5 portrait format.",
-    "status": "needs_image",
-    "gen_failures": 2
+    "status": "skipped",
+    "gen_failures": 3
   },
   {
     "n": 3,
