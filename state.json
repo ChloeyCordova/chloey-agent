@@ -1,11 +1,12 @@
 {
-  "telegram_offset": 449309128,
+  "telegram_offset": 449309130,
   "paused": false,
   "last_prompt_sent": 1,
-  "last_post_date": null,
+  "last_post_date": "2026-10-25",
   "handled_comments": [],
   "online_announced": true,
   "empty_queue_warned": "2026-10-25",
   "comments_since": "2026-10-26T02:41:34.273816+00:00",
-  "last_error": "Comments: Instagram error on GET me: Invalid OAuth access token - Cannot parse access token"
+  "errors": {},
+  "ig_ok_announced": true
 }
