@@ -1,0 +1,30 @@
+{
+  "timezone": "America/Los_Angeles",
+  "post_days": [
+    "Mon",
+    "Tue",
+    "Thu",
+    "Fri",
+    "Sun"
+  ],
+  "post_hour": 17,
+  "max_comment_replies_per_run": 15,
+  "posts_to_watch_for_comments": 10,
+  "claude_model": "claude-sonnet-5-5",
+  "comment_model": "claude-haiku-5-5",
+  "instagram_api_version": "v26.0",
+  "add_hashtags": true,
+  "auto_approve": true,
+  "queue_target": 3,
+  "max_image_attempts": 2,
+  "gemini_model": "gemini-3-pro-image",
+  "face_match_min": 60,
+  "ref_match_min": 65,
+  "refs_per_run": 3,
+  "refs_max_tries": 24,
+  "anchor_ref": "8-rooftop-pool-posted.jpg",
+  "exclude_refs": [
+    "5-car-selfie-navy-blazer.jpg",
+    "7-seattle-ferry.jpg"
+  ]
+}

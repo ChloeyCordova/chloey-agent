@@ -1,0 +1,5 @@
+anthropic>=0.40
+requests>=2.31
+Pillow>=10.0
+opencv-python-headless>=4.9
+numpy>=1.26
