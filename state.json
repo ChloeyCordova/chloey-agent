@@ -7,8 +7,6 @@
   "online_announced": true,
   "empty_queue_warned": "2026-10-25",
   "comments_since": "2026-10-26T02:41:34.273816+00:00",
-  "errors": {
-    "Telegram": "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))"
-  },
+  "errors": {},
   "ig_ok_announced": true
 }
